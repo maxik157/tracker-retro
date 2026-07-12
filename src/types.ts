@@ -48,6 +48,7 @@ export interface RetroUser {
 export interface RetroBoardDirectoryItem {
   id: string
   title: string
+  createdAt?: string
   updatedAt: string
   ownerUserId: string
   visibility: 'public' | 'private'

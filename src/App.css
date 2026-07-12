@@ -2116,20 +2116,17 @@ textarea:focus {
   width: 31px;
   height: 29px;
   border: 0;
-  border-left: 1px solid #e0e5ef;
   border-radius: 0;
-  background: #fff;
+  background: transparent;
   color: #4c5369;
   font-size: 16px;
 }
 
 .author-anonymous-button:hover {
-  background: #eef3ff;
   color: #244dba;
 }
 
 .author-anonymous-button.is-anonymous {
-  background: #eefaff;
   color: #23647a;
 }
 
@@ -2174,9 +2171,16 @@ textarea:focus {
 }
 
 .board-controls__right .board-stats-eye .topbar-icon-button {
-  border: 1px solid #d8dde7;
-  background: #fff;
+  width: 31px;
+  height: 31px;
+  border: 0;
+  background: transparent;
   box-shadow: none;
+}
+
+.board-controls__right .board-stats-eye .topbar-icon-button:hover {
+  background: transparent;
+  color: #244dba;
 }
 
 .board-stats-popover {
@@ -2528,44 +2532,44 @@ textarea:focus {
   min-width: 0;
 }
 
-.solution-sources {
+.solution-problem-stack {
   display: grid;
   gap: 6px;
   min-width: 0;
-  max-width: 100%;
 }
 
-.solution-sources__count {
-  justify-self: start;
-  border: 1px solid #cfdbff;
+.solution-problem-chip {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid #dce4f2;
+  border-radius: 6px;
+  padding: 7px 9px;
+  background: #fbfcff;
+  color: #26354f;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.solution-problem-chip > span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.solution-problem-chip__index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
   border-radius: 999px;
-  padding: 2px 8px;
-  background: #f3f6ff;
+  background: #eef3ff;
   color: #3459b7;
   font-size: 11px;
-  font-weight: 800;
-  line-height: 1.45;
-}
-
-.solution-sources__list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  min-width: 0;
-}
-
-.solution-sources__list span {
-  max-width: min(360px, 100%);
-  overflow: hidden;
-  border-left: 3px solid #90a7ff;
-  border-radius: 4px;
-  padding: 4px 7px;
-  background: #f6f8ff;
-  color: #52617a;
-  font-size: 12px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-weight: 900;
 }
 
 .solution-summary {

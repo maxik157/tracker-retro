@@ -454,6 +454,7 @@ function normalizeBoardListItem(item: Partial<BoardListItem>): BoardListItem | n
   return {
     id: item.id,
     title: item.title || 'Ретроспектива команды',
+    createdAt: item.createdAt || item.updatedAt || nowIso(),
     updatedAt: item.updatedAt || nowIso(),
     ownerUserId: item.ownerUserId || '',
     visibility: item.visibility || 'public',
@@ -998,6 +999,7 @@ function App() {
       upsertBoardListItem({
         id: nextBoard.id,
         title: nextBoard.title,
+        createdAt: nextBoard.createdAt,
         updatedAt: nextBoard.updatedAt,
         ownerUserId: nextBoard.access.ownerUserId,
         visibility: nextBoard.access.visibility,
@@ -1593,6 +1595,7 @@ function App() {
         upsertBoardListItem({
           id: nextBoardId,
           title,
+          createdAt: nextBoard.createdAt || createdAt,
           updatedAt: nextBoard.updatedAt || createdAt,
           ownerUserId: nextBoard.access.ownerUserId,
           visibility: nextBoard.access.visibility,
@@ -1662,6 +1665,8 @@ function App() {
   }
 
   function renderBoardAccountMenu() {
+    const accountMetaLabel = boardId && board ? boardRoleLabel : currentUser ? 'Профиль' : 'Вход'
+
     return (
       <div className="account-menu" data-menu-root="true">
         <button
@@ -1681,7 +1686,7 @@ function App() {
             {currentUser ? (
               <>
                 <div className="account-popover__title">{currentUser.name}</div>
-                <div className="account-popover__meta">{boardRoleLabel}</div>
+                <div className="account-popover__meta">{accountMetaLabel}</div>
                 {createdAccessCode ? (
                   <span className="account-message account-message--inline">
                     Код: <strong>{createdAccessCode}</strong>
@@ -3067,7 +3072,7 @@ function App() {
       <main className="home-shell">
         <header className="home-topbar">
           <img src={trackerLogo} alt="Tracker Retro" className="home-logo" />
-          {renderAccountPanel()}
+          {renderBoardAccountMenu()}
         </header>
 
         <section className="home-board-list">
@@ -3109,60 +3114,64 @@ function App() {
 
           {boardList.length ? (
             <div className="home-board-grid">
-              {boardList.map((item) => (
-                <article
-                  key={item.id}
-                  className={[
-                    'home-board-item',
-                    boardListDragId === item.id ? 'is-dragging' : '',
-                  ]
-                    .filter(Boolean)
-                    .join(' ')}
-                  draggable
-                  onDragStart={(event) => {
-                    event.dataTransfer.effectAllowed = 'move'
-                    event.dataTransfer.setData('text/plain', item.id)
-                    setBoardListDragId(item.id)
-                  }}
-                  onDragOver={(event) => {
-                    if (!boardListDragId || boardListDragId === item.id) {
-                      return
-                    }
+              {boardList.map((item) => {
+                const boardAccessLabel =
+                  currentUser?.id && item.ownerUserId === currentUser.id
+                    ? 'Владелец'
+                    : 'Пользователь'
 
-                    event.preventDefault()
-                    event.dataTransfer.dropEffect = 'move'
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault()
-                    handleDropBoardListItem(item.id)
-                  }}
-                  onDragEnd={() => setBoardListDragId(null)}
-                >
-                  <button
-                    type="button"
-                    className="home-board-item__main"
-                    onClick={() => openBoard(item.id)}
+                return (
+                  <article
+                    key={item.id}
+                    className={[
+                      'home-board-item',
+                      boardListDragId === item.id ? 'is-dragging' : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
+                    draggable
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = 'move'
+                      event.dataTransfer.setData('text/plain', item.id)
+                      setBoardListDragId(item.id)
+                    }}
+                    onDragOver={(event) => {
+                      if (!boardListDragId || boardListDragId === item.id) {
+                        return
+                      }
+
+                      event.preventDefault()
+                      event.dataTransfer.dropEffect = 'move'
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault()
+                      handleDropBoardListItem(item.id)
+                    }}
+                    onDragEnd={() => setBoardListDragId(null)}
                   >
-                    <span>{item.title || 'Ретроспектива команды'}</span>
-                    <small>
-                      {formatTimestamp(item.updatedAt)}
-                      {currentUser?.id && item.ownerUserId === currentUser.id
-                        ? ' - Владелец'
-                        : ' - Просмотр'}
-                    </small>
-                  </button>
-                  <div className="home-board-item__actions">
                     <button
                       type="button"
-                      className="home-board-item__icon home-board-item__icon--danger"
-                      aria-label="Удалить доску из списка"
-                      onClick={() => handleDeleteBoardFromList(item)}
+                      className="home-board-item__main"
+                      onClick={() => openBoard(item.id)}
                     >
-                      <i className="ri-delete-bin-line" aria-hidden="true" />
+                      <span>{item.title || 'Ретроспектива команды'}</span>
+                      <small>
+                        {formatTimestamp(item.createdAt || item.updatedAt)} - {boardAccessLabel}
+                      </small>
                     </button>
-                  </div>
-                </article>
-              ))}
+                    <div className="home-board-item__actions">
+                      <button
+                        type="button"
+                        className="home-board-item__icon home-board-item__icon--danger"
+                        aria-label="Удалить доску из списка"
+                        onClick={() => handleDeleteBoardFromList(item)}
+                      >
+                        <i className="ri-delete-bin-line" aria-hidden="true" />
+                      </button>
+                    </div>
+                  </article>
+                )
+              })}
             </div>
           ) : (
             <div className="home-empty">
@@ -4409,19 +4418,20 @@ function App() {
                         {resolution.status === 'resolved' ? <SolutionFirework /> : null}
                         <div className="solution-item__header">
                           <div className="solution-item__title">
-                            <h3>{card.content}</h3>
                             {sections.length > 1 ? (
-                              <div className="solution-sources" aria-label="Объединенные карточки">
-                                <span className="solution-sources__count">
-                                  Объединено: {sections.length}
-                                </span>
-                                <div className="solution-sources__list">
-                                  {sections.slice(1).map((section) => (
-                                    <span key={section.id}>{section.content}</span>
-                                  ))}
-                                </div>
+                              <div className="solution-problem-stack" aria-label="Объединенные карточки">
+                                {sections.map((section, sectionIndex) => (
+                                  <div className="solution-problem-chip" key={section.id}>
+                                    <span className="solution-problem-chip__index">
+                                      {sectionIndex + 1}
+                                    </span>
+                                    <span>{section.content}</span>
+                                  </div>
+                                ))}
                               </div>
-                            ) : null}
+                            ) : (
+                              <h3>{card.content}</h3>
+                            )}
                           </div>
                           <div className="solution-item__header-actions">
                             <div

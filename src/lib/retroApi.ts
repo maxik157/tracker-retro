@@ -94,6 +94,10 @@ function normalizeAccessCode(value: string) {
   return value.trim().replace(/[^a-zA-Z0-9]/g, '').toUpperCase()
 }
 
+function normalizeUserName(value: string) {
+  return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase('ru-RU')
+}
+
 function formatAccessCode(value: string) {
   return value.replace(/(.{4})/g, '$1-').replace(/-$/, '')
 }
@@ -372,6 +376,7 @@ function boardToDirectoryItem(board: RetroBoard): RetroBoardDirectoryItem {
   return {
     id: board.id,
     title: board.title,
+    createdAt: board.createdAt,
     updatedAt: board.updatedAt,
     ownerUserId: board.access.ownerUserId || '',
     visibility: board.access.visibility || 'public',
@@ -405,6 +410,7 @@ export async function fetchBoardDirectory() {
     itemsById.set(id, {
       id: item?.id || id,
       title: item?.title || 'Ретроспектива команды',
+      createdAt: item?.createdAt || item?.updatedAt || nowIso(),
       updatedAt: item?.updatedAt || nowIso(),
       ownerUserId: item?.ownerUserId || '',
       visibility: 'public',
@@ -435,7 +441,17 @@ export async function fetchBoardDirectory() {
 }
 
 export async function createRetroUser(name: string) {
-  const trimmedName = name.trim() || 'Участник'
+  const trimmedName = name.trim().replace(/\s+/g, ' ') || 'Участник'
+  const normalizedName = normalizeUserName(trimmedName)
+  const users = await request<Record<string, Partial<RetroUser>> | null>('/users.json')
+  const hasDuplicateName = Object.values(users || {}).some(
+    (user) => normalizeUserName(user?.name || '') === normalizedName,
+  )
+
+  if (hasDuplicateName) {
+    throw new Error('Это имя уже занято. Выберите другое имя или войдите по коду доступа.')
+  }
+
   const accessCode = generateAccessCode()
   const accessCodeHash = await hashAccessCode(accessCode)
   const existingUserId = await request<string | null>(getUserByCodePath(accessCodeHash))
