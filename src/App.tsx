@@ -4,11 +4,13 @@ import './App.css'
 import trackerLogo from './assets/tracker-retro-logo-cropped.png'
 import {
   addComment,
+  createRetroUser,
   createCard,
   createColumn,
   deleteColumn,
   deleteAllCards,
   deleteCard,
+  fetchBoardDirectory,
   getBoardId,
   getParticipantId,
   getSortedCards,
@@ -17,6 +19,8 @@ import {
   setPoll,
   subscribeToBoard,
   toggleVote,
+  signInRetroUser,
+  updateBoardAccess,
   updateBoardMeta,
   updateColumn,
   updateBoardSettings,
@@ -27,6 +31,8 @@ import {
 } from './lib/retroApi'
 import type {
   RetroBoard,
+  RetroBoardAccess,
+  RetroBoardDirectoryItem,
   RetroBoardSettings,
   RetroCard,
   RetroColumn,
@@ -35,6 +41,7 @@ import type {
   RetroProblemResolution,
   RetroProblemStep,
   RetroPoll,
+  RetroUser,
   SortMode,
 } from './types'
 
@@ -42,11 +49,8 @@ type DraftMap = Record<string, string>
 type GifDraftMap = Record<string, string | null>
 type ComposerMode = string | null
 type CardColor = RetroCard['color']
-type BoardListItem = {
-  id: string
-  title: string
-  updatedAt: string
-}
+type BoardListItem = RetroBoardDirectoryItem
+type AuthMode = 'sign-in' | 'sign-up'
 type DragState = {
   cardId: string
   overColumnId: string | null
@@ -129,6 +133,7 @@ type WorkspaceView = 'board' | 'solutions'
 type ProblemStatus = RetroProblemResolution['status']
 
 const BOARD_LIST_STORAGE_KEY = 'retro-board-list'
+const AUTH_USER_STORAGE_KEY = 'retro-user'
 const SORT_STORAGE_PREFIX = 'retro-local-sort'
 const AUTHOR_STORAGE_PREFIX = 'retro-board-author'
 const ANONYMOUS_STORAGE_PREFIX = 'retro-board-anonymous'
@@ -441,6 +446,44 @@ function getNextOrder(items: Array<{ order: number }>) {
   return items.reduce((max, item) => Math.max(max, item.order), -1) + 1
 }
 
+function normalizeBoardListItem(item: Partial<BoardListItem>): BoardListItem | null {
+  if (!item.id) {
+    return null
+  }
+
+  return {
+    id: item.id,
+    title: item.title || 'Ретроспектива команды',
+    updatedAt: item.updatedAt || nowIso(),
+    ownerUserId: item.ownerUserId || '',
+    visibility: item.visibility || 'public',
+  }
+}
+
+function readStoredUser(): RetroUser | null {
+  try {
+    const raw = localStorage.getItem(AUTH_USER_STORAGE_KEY)
+
+    if (!raw) {
+      return null
+    }
+
+    const parsed = JSON.parse(raw) as RetroUser
+    return parsed?.id ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function writeStoredUser(user: RetroUser | null) {
+  if (!user) {
+    localStorage.removeItem(AUTH_USER_STORAGE_KEY)
+    return
+  }
+
+  localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(user))
+}
+
 function readBoardList(): BoardListItem[] {
   try {
     const raw = localStorage.getItem(BOARD_LIST_STORAGE_KEY)
@@ -449,8 +492,12 @@ function readBoardList(): BoardListItem[] {
       return []
     }
 
-    const parsed = JSON.parse(raw) as BoardListItem[]
-    return Array.isArray(parsed) ? parsed : []
+    const parsed = JSON.parse(raw) as Array<Partial<BoardListItem>>
+    return Array.isArray(parsed)
+      ? parsed
+          .map(normalizeBoardListItem)
+          .filter((item): item is BoardListItem => Boolean(item))
+      : []
   } catch {
     return []
   }
@@ -460,16 +507,53 @@ function writeBoardList(items: BoardListItem[]) {
   localStorage.setItem(BOARD_LIST_STORAGE_KEY, JSON.stringify(items))
 }
 
+function mergeBoardLists(localItems: BoardListItem[], remoteItems: BoardListItem[]) {
+  const byId = new Map<string, BoardListItem>()
+
+  ;[...remoteItems, ...localItems].forEach((item) => {
+    const normalized = normalizeBoardListItem(item)
+
+    if (!normalized) {
+      return
+    }
+
+    const current = byId.get(normalized.id)
+
+    if (
+      !current ||
+      new Date(normalized.updatedAt).getTime() >= new Date(current.updatedAt).getTime()
+    ) {
+      byId.set(normalized.id, normalized)
+    }
+  })
+
+  return Array.from(byId.values())
+    .sort(
+      (left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
+    )
+    .slice(0, 48)
+}
+
 function upsertBoardListItem(item: BoardListItem) {
+  const normalized = normalizeBoardListItem(item)
+
+  if (!normalized) {
+    return readBoardList()
+  }
+
   const currentItems = readBoardList()
-  const existingIndex = currentItems.findIndex((boardItem) => boardItem.id === item.id)
+  const existingIndex = currentItems.findIndex((boardItem) => boardItem.id === normalized.id)
   const nextItems =
     existingIndex >= 0
-      ? currentItems.map((boardItem) => (boardItem.id === item.id ? item : boardItem))
-      : [item, ...currentItems].slice(0, 24)
+      ? currentItems.map((boardItem) =>
+          boardItem.id === normalized.id ? normalized : boardItem,
+        )
+      : [normalized, ...currentItems]
 
-  writeBoardList(nextItems)
-  return nextItems
+  const limitedItems = nextItems.slice(0, 48)
+
+  writeBoardList(limitedItems)
+  return limitedItems
 }
 
 function moveBoardListItem(items: BoardListItem[], sourceId: string, targetId: string) {
@@ -752,6 +836,14 @@ function App() {
   const [boardId, setBoardId] = useState<string | null>(() => getBoardId())
   const [participantId] = useState(() => getParticipantId())
   const [boardList, setBoardList] = useState<BoardListItem[]>(() => readBoardList())
+  const [currentUser, setCurrentUser] = useState<RetroUser | null>(() => readStoredUser())
+  const [authMode, setAuthMode] = useState<AuthMode>('sign-in')
+  const [authName, setAuthName] = useState('')
+  const [authCode, setAuthCode] = useState('')
+  const [authLoading, setAuthLoading] = useState(false)
+  const [authError, setAuthError] = useState<string | null>(null)
+  const [createdAccessCode, setCreatedAccessCode] = useState<string | null>(null)
+  const [directoryLoading, setDirectoryLoading] = useState(false)
   const [isCreateBoardOpen, setIsCreateBoardOpen] = useState(false)
   const [newBoardTitle, setNewBoardTitle] = useState('')
   const [board, setBoard] = useState<RetroBoard | null>(null)
@@ -840,6 +932,35 @@ function App() {
   }, [voteLimitWarning])
 
   useEffect(() => {
+    let active = true
+
+    setDirectoryLoading(true)
+
+    fetchBoardDirectory()
+      .then((items) => {
+        if (!active) {
+          return
+        }
+
+        const nextItems = mergeBoardLists(readBoardList(), items)
+        writeBoardList(nextItems)
+        setBoardList(nextItems)
+      })
+      .catch((directoryError) => {
+        console.error(directoryError)
+      })
+      .finally(() => {
+        if (active) {
+          setDirectoryLoading(false)
+        }
+      })
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
     function handlePopState() {
       const url = new URL(window.location.href)
       const nextBoardId = url.searchParams.get('board')
@@ -877,6 +998,8 @@ function App() {
         id: nextBoard.id,
         title: nextBoard.title,
         updatedAt: nextBoard.updatedAt,
+        ownerUserId: nextBoard.access.ownerUserId,
+        visibility: nextBoard.access.visibility,
       }),
     )
     setSettings(mergeSettings(nextBoard.settings))
@@ -1212,10 +1335,55 @@ function App() {
   ).length
   const resolvedProblemsCount = actionCards.length - openProblemsCount
   const currentBoardId = boardId ?? ''
-  const isBoardOwner = !board?.ownerId || board.ownerId === participantId
-  const canManageBoard = isBoardOwner
+  const accountRole = currentUser && board ? board.access.members[currentUser.id]?.role : null
+  const isLegacyOwner = Boolean(
+    board && !board.access.ownerUserId && board.ownerId && board.ownerId === participantId,
+  )
+  const isBoardOwner =
+    Boolean(board && currentUser && board.access.ownerUserId === currentUser.id) ||
+    accountRole === 'owner' ||
+    isLegacyOwner ||
+    Boolean(board && !board.access.ownerUserId && !board.ownerId)
+  const canManageBoard = isBoardOwner || accountRole === 'editor'
+  const boardRoleLabel = isBoardOwner ? 'Владелец' : canManageBoard ? 'Редактор' : 'Просмотр'
   const canControlTimer = canManageBoard || board?.timer.mode === 'idle'
   const effectiveAuthor = isAnonymousAuthor ? 'Анонимно' : author.trim() || 'Участник'
+
+  useEffect(() => {
+    if (
+      !board ||
+      !currentUser ||
+      board.access.ownerUserId ||
+      !board.ownerId ||
+      board.ownerId !== participantId
+    ) {
+      return
+    }
+
+    const timestamp = nowIso()
+    const currentMember = board.access.members[currentUser.id]
+    const nextAccess: RetroBoardAccess = {
+      ...board.access,
+      visibility: board.access.visibility || 'public',
+      ownerUserId: currentUser.id,
+      members: {
+        ...board.access.members,
+        [currentUser.id]: {
+          role: 'owner',
+          displayName: currentUser.name,
+          addedAt: currentMember?.addedAt || timestamp,
+        },
+      },
+    }
+
+    updateBoardAccess(board.id, nextAccess).catch((ownershipError) => {
+      setError(
+        ownershipError instanceof Error
+          ? ownershipError.message
+          : 'Не удалось закрепить владельца доски.',
+      )
+    })
+  }, [board, currentUser, participantId])
 
   function openGifPicker(target: GifPickerTarget) {
     setGifPickerTarget(target)
@@ -1417,12 +1585,14 @@ function App() {
     setError(null)
 
     try {
-      const nextBoard = await seedBoard(nextBoardId, participantId, title)
+      const nextBoard = await seedBoard(nextBoardId, participantId, title, currentUser)
       setBoardList(
         upsertBoardListItem({
           id: nextBoardId,
           title,
           updatedAt: nextBoard.updatedAt || createdAt,
+          ownerUserId: nextBoard.access.ownerUserId,
+          visibility: nextBoard.access.visibility,
         }),
       )
       setNewBoardTitle('')
@@ -1440,6 +1610,113 @@ function App() {
   function requestCreateBoard() {
     setIsCreateBoardOpen(true)
     setNewBoardTitle('')
+  }
+
+  function setAuthTab(nextMode: AuthMode) {
+    setAuthMode(nextMode)
+    setAuthError(null)
+    setCreatedAccessCode(null)
+  }
+
+  async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setAuthLoading(true)
+    setAuthError(null)
+    setCreatedAccessCode(null)
+
+    try {
+      if (authMode === 'sign-up') {
+        const { user, accessCode } = await createRetroUser(authName)
+
+        setCurrentUser(user)
+        writeStoredUser(user)
+        setCreatedAccessCode(accessCode)
+        setAuthName('')
+      } else {
+        const user = await signInRetroUser(authCode)
+
+        setCurrentUser(user)
+        writeStoredUser(user)
+        setAuthCode('')
+      }
+    } catch (authSubmitError) {
+      setAuthError(
+        authSubmitError instanceof Error ? authSubmitError.message : 'Не удалось войти.',
+      )
+    } finally {
+      setAuthLoading(false)
+    }
+  }
+
+  function handleSignOut() {
+    setCurrentUser(null)
+    writeStoredUser(null)
+    setCreatedAccessCode(null)
+    setAuthCode('')
+  }
+
+  function renderAccountPanel(compact = false) {
+    if (currentUser) {
+      return (
+        <div className={`account-panel account-panel--signed-in${compact ? ' account-panel--compact' : ''}`}>
+          <div className="account-user">
+            <i className="ri-user-line" aria-hidden="true" />
+            <span>{currentUser.name}</span>
+          </div>
+          {createdAccessCode ? (
+            <span className="account-message">
+              Код: <strong>{createdAccessCode}</strong>
+            </span>
+          ) : null}
+          <button type="button" className="inline-secondary" onClick={handleSignOut}>
+            Выйти
+          </button>
+        </div>
+      )
+    }
+
+    return (
+      <form
+        className={`account-panel account-form${compact ? ' account-panel--compact' : ''}`}
+        onSubmit={handleAuthSubmit}
+      >
+        <div className="account-tabs" role="tablist" aria-label="Аккаунт">
+          <button
+            type="button"
+            className={authMode === 'sign-in' ? 'is-active' : ''}
+            onClick={() => setAuthTab('sign-in')}
+          >
+            Вход
+          </button>
+          <button
+            type="button"
+            className={authMode === 'sign-up' ? 'is-active' : ''}
+            onClick={() => setAuthTab('sign-up')}
+          >
+            Регистрация
+          </button>
+        </div>
+        {authMode === 'sign-up' ? (
+          <input
+            value={authName}
+            onChange={(event) => setAuthName(event.target.value)}
+            placeholder="Имя"
+            aria-label="Имя"
+          />
+        ) : (
+          <input
+            value={authCode}
+            onChange={(event) => setAuthCode(event.target.value)}
+            placeholder="Код доступа"
+            aria-label="Код доступа"
+          />
+        )}
+        <button type="submit" className="inline-secondary" disabled={authLoading}>
+          {authLoading ? '...' : authMode === 'sign-in' ? 'Войти' : 'Создать'}
+        </button>
+        {authError ? <span className="account-message account-message--error">{authError}</span> : null}
+      </form>
+    )
   }
 
   function ownsCard(card: RetroCard | RetroMergedCard) {
@@ -2649,6 +2926,7 @@ function App() {
       <main className="home-shell">
         <header className="home-topbar">
           <img src={trackerLogo} alt="Tracker Retro" className="home-logo" />
+          {renderAccountPanel()}
         </header>
 
         <section className="home-board-list">
@@ -2725,7 +3003,12 @@ function App() {
                     onClick={() => openBoard(item.id)}
                   >
                     <span>{item.title || 'Ретроспектива команды'}</span>
-                    <small>{formatTimestamp(item.updatedAt)}</small>
+                    <small>
+                      {formatTimestamp(item.updatedAt)}
+                      {currentUser?.id && item.ownerUserId === currentUser.id
+                        ? ' - Владелец'
+                        : ' - Просмотр'}
+                    </small>
                   </button>
                   <div className="home-board-item__actions">
                     <button
@@ -2742,7 +3025,7 @@ function App() {
             </div>
           ) : (
             <div className="home-empty">
-              <p>Пока нет сохраненных досок.</p>
+              <p>{directoryLoading ? 'Загружаем доски...' : 'Пока нет сохраненных досок.'}</p>
             </div>
           )}
         </section>
@@ -2812,6 +3095,12 @@ function App() {
         </form>
 
         <div className="topbar__actions">
+          <div className="account-status" title={currentUser ? currentUser.name : 'Гость'}>
+            <i className={currentUser ? 'ri-user-line' : 'ri-user-smile-line'} aria-hidden="true" />
+            <span>{currentUser ? currentUser.name : 'Гость'}</span>
+            <small>{boardRoleLabel}</small>
+          </div>
+          {renderAccountPanel(true)}
           <div className="board-stats-eye" data-menu-root="true">
             <button type="button" className="topbar-icon-button" aria-label="Статистика доски">
               <i className="ri-eye-line" aria-hidden="true" />

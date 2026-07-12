@@ -1,10 +1,13 @@
 import type {
   RetroBoard,
+  RetroBoardAccess,
+  RetroBoardDirectoryItem,
   RetroBoardSettings,
   RetroCard,
   RetroColumn,
   RetroComment,
   RetroMergedCard,
+  RetroUser,
   RetroPoll,
   RetroPollOption,
   RetroTimer,
@@ -87,6 +90,41 @@ function nowIso() {
   return new Date().toISOString()
 }
 
+function normalizeAccessCode(value: string) {
+  return value.trim().replace(/[^a-zA-Z0-9]/g, '').toUpperCase()
+}
+
+function formatAccessCode(value: string) {
+  return value.replace(/(.{4})/g, '$1-').replace(/-$/, '')
+}
+
+function generateAccessCode() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+  const bytes = new Uint8Array(12)
+  crypto.getRandomValues(bytes)
+
+  return formatAccessCode(
+    Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join(''),
+  )
+}
+
+async function hashAccessCode(accessCode: string) {
+  const normalized = normalizeAccessCode(accessCode)
+
+  if (!normalized) {
+    throw new Error('Введите код доступа.')
+  }
+
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(normalized),
+  )
+
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('')
+}
+
 function toRecord<T extends { id: string }>(items: T[]) {
   return items.reduce<Record<string, T>>((acc, item) => {
     acc[item.id] = item
@@ -100,6 +138,18 @@ function getBoardPath(boardId: string) {
 
 function getEntityPath(boardId: string, path: string) {
   return `/boards/${boardId}/${path}.json`
+}
+
+function getUserPath(userId: string) {
+  return `/users/${userId}.json`
+}
+
+function getUserByCodePath(accessCodeHash: string) {
+  return `/usersByAccessCode/${accessCodeHash}.json`
+}
+
+function getDirectoryPath(boardId: string) {
+  return `/boardDirectory/${boardId}.json`
 }
 
 async function request<T>(path: string, init?: RequestInit) {
@@ -275,10 +325,16 @@ function normalizeBoard(raw: Partial<RetroBoard> | null, boardId: string): Retro
     raw?.description?.trim() === 'Share wins, friction points, and the next actions for the team.'
       ? ''
       : raw?.description || ''
+  const access: RetroBoardAccess = {
+    visibility: raw?.access?.visibility || 'public',
+    ownerUserId: raw?.access?.ownerUserId || '',
+    members: raw?.access?.members || {},
+  }
 
   return {
     id: raw?.id || boardId,
     ownerId: raw?.ownerId || '',
+    access,
     title: raw?.title || 'Ретроспектива команды',
     description,
     createdAt: raw?.createdAt || nowIso(),
@@ -312,18 +368,148 @@ async function patchBoard(boardId: string, patch: Record<string, unknown>) {
   })
 }
 
+function boardToDirectoryItem(board: RetroBoard): RetroBoardDirectoryItem {
+  return {
+    id: board.id,
+    title: board.title,
+    updatedAt: board.updatedAt,
+    ownerUserId: board.access.ownerUserId || '',
+    visibility: board.access.visibility || 'public',
+  }
+}
+
+async function upsertBoardDirectory(board: RetroBoard) {
+  if (board.access.visibility !== 'public') {
+    return
+  }
+
+  await request(getDirectoryPath(board.id), {
+    method: 'PUT',
+    body: JSON.stringify(boardToDirectoryItem(board)),
+  })
+}
+
+export async function fetchBoardDirectory() {
+  const [directoryRaw, boardsRaw] = await Promise.all([
+    request<Record<string, Partial<RetroBoardDirectoryItem>> | null>('/boardDirectory.json'),
+    request<Record<string, Partial<RetroBoard>> | null>('/boards.json'),
+  ])
+  const itemsById = new Map<string, RetroBoardDirectoryItem>()
+  const missingPublicBoards: RetroBoard[] = []
+
+  Object.entries(directoryRaw || {}).forEach(([id, item]) => {
+    if ((item?.visibility || 'public') !== 'public') {
+      return
+    }
+
+    itemsById.set(id, {
+      id: item?.id || id,
+      title: item?.title || 'Ретроспектива команды',
+      updatedAt: item?.updatedAt || nowIso(),
+      ownerUserId: item?.ownerUserId || '',
+      visibility: 'public',
+    })
+  })
+
+  Object.entries(boardsRaw || {}).forEach(([id, raw]) => {
+    const board = normalizeBoard(raw || {}, id)
+
+    if (board.access.visibility !== 'public') {
+      return
+    }
+
+    itemsById.set(id, boardToDirectoryItem(board))
+
+    if (!directoryRaw?.[id]) {
+      missingPublicBoards.push(board)
+    }
+  })
+
+  if (missingPublicBoards.length) {
+    await Promise.allSettled(missingPublicBoards.map((board) => upsertBoardDirectory(board)))
+  }
+
+  return Array.from(itemsById.values()).sort(
+    (left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
+  )
+}
+
+export async function createRetroUser(name: string) {
+  const trimmedName = name.trim() || 'Участник'
+  const accessCode = generateAccessCode()
+  const accessCodeHash = await hashAccessCode(accessCode)
+  const existingUserId = await request<string | null>(getUserByCodePath(accessCodeHash))
+
+  if (existingUserId) {
+    return createRetroUser(trimmedName)
+  }
+
+  const timestamp = nowIso()
+  const user: RetroUser = {
+    id: generateId('user'),
+    name: trimmedName,
+    accessCodeHash,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }
+
+  await request(getUserPath(user.id), {
+    method: 'PUT',
+    body: JSON.stringify(user),
+  })
+  await request(getUserByCodePath(accessCodeHash), {
+    method: 'PUT',
+    body: JSON.stringify(user.id),
+  })
+
+  return { user, accessCode }
+}
+
+export async function signInRetroUser(accessCode: string) {
+  const accessCodeHash = await hashAccessCode(accessCode)
+  const userId = await request<string | null>(getUserByCodePath(accessCodeHash))
+
+  if (!userId) {
+    throw new Error('Код доступа не найден.')
+  }
+
+  const user = await request<RetroUser | null>(getUserPath(userId))
+
+  if (!user) {
+    throw new Error('Профиль не найден.')
+  }
+
+  return user
+}
+
 export async function seedBoard(
   boardId = DEFAULT_BOARD_ID,
   ownerId = '',
   title = 'Ретроспектива команды',
+  ownerUser?: RetroUser | null,
 ) {
+  const timestamp = nowIso()
+  const access: RetroBoardAccess = {
+    visibility: 'public',
+    ownerUserId: ownerUser?.id || '',
+    members: ownerUser
+      ? {
+          [ownerUser.id]: {
+            role: 'owner',
+            displayName: ownerUser.name,
+            addedAt: timestamp,
+          },
+        }
+      : {},
+  }
   const seeded: RetroBoard = {
     id: boardId,
     ownerId,
+    access,
     title,
     description: '',
-    createdAt: nowIso(),
-    updatedAt: nowIso(),
+    createdAt: timestamp,
+    updatedAt: timestamp,
     sortOrder: 'order',
     settings: defaultBoardSettings,
     columns: toRecord(defaultColumns),
@@ -333,6 +519,7 @@ export async function seedBoard(
   }
 
   await putBoard(boardId, seeded)
+  await upsertBoardDirectory(seeded)
   return seeded
 }
 
@@ -510,6 +697,20 @@ export async function updateBoardMeta(
   next: Pick<RetroBoard, 'title' | 'description'>,
 ) {
   await patchBoard(boardId, next)
+  const board = await fetchBoard(boardId)
+
+  if (board) {
+    await upsertBoardDirectory(board)
+  }
+}
+
+export async function updateBoardAccess(boardId: string, access: RetroBoardAccess) {
+  await patchBoard(boardId, { access })
+  const board = await fetchBoard(boardId)
+
+  if (board) {
+    await upsertBoardDirectory(board)
+  }
 }
 
 export async function updateBoardSettings(boardId: string, settings: RetroBoardSettings) {

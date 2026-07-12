@@ -23,6 +23,36 @@ export interface RetroBoardSettings {
   language: 'ru' | 'en'
 }
 
+export type RetroBoardRole = 'owner' | 'editor' | 'viewer'
+
+export interface RetroBoardMember {
+  role: RetroBoardRole
+  displayName: string
+  addedAt: string
+}
+
+export interface RetroBoardAccess {
+  visibility: 'public' | 'private'
+  ownerUserId: string
+  members: Record<string, RetroBoardMember>
+}
+
+export interface RetroUser {
+  id: string
+  name: string
+  accessCodeHash: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface RetroBoardDirectoryItem {
+  id: string
+  title: string
+  updatedAt: string
+  ownerUserId: string
+  visibility: 'public' | 'private'
+}
+
 export interface RetroComment {
   id: string
   createdBy: string
@@ -114,6 +144,7 @@ export interface RetroPoll {
 export interface RetroBoard {
   id: string
   ownerId: string
+  access: RetroBoardAccess
   title: string
   description: string
   createdAt: string
