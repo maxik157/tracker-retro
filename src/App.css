@@ -154,8 +154,8 @@ textarea {
 
 .home-logo {
   display: block;
-  width: 184px;
-  height: 30px;
+  width: 210px;
+  height: 32px;
   object-fit: contain;
   object-position: left center;
 }
@@ -327,13 +327,15 @@ textarea {
 
 .topbar__logo {
   display: block;
-  width: auto;
-  height: 30px;
+  width: 210px;
+  height: 32px;
+  object-fit: contain;
+  object-position: left center;
 }
 
 .topbar__logo-button {
   display: block;
-  width: 184px;
+  width: 210px;
   height: 34px;
   border: 0;
   border-radius: 4px;
@@ -1926,8 +1928,8 @@ body,
 }
 
 .topbar__logo {
-  width: 184px;
-  height: 30px;
+  width: 210px;
+  height: 32px;
   object-fit: contain;
   object-position: left center;
 }
@@ -3836,15 +3838,15 @@ textarea.easy-form-input {
 }
 
 .topbar__logo {
-  width: 184px;
-  height: 30px;
+  width: 210px;
+  height: 32px;
   flex: 0 0 auto;
   object-fit: contain;
   object-position: left center;
 }
 
 .topbar__logo-button {
-  width: 184px;
+  width: 210px;
   height: 34px;
 }
 
@@ -4369,13 +4371,13 @@ textarea.easy-form-input {
 
 @media (max-width: 720px) {
   .topbar__logo-button {
-    width: 158px;
+    width: 176px;
     height: 30px;
   }
 
   .topbar__logo {
-    width: 158px;
-    height: 26px;
+    width: 176px;
+    height: 28px;
   }
 }
 
@@ -4543,14 +4545,14 @@ textarea.easy-form-input {
   }
 
   .topbar__logo-button {
-    width: 128px;
+    width: 150px;
     height: 30px;
     overflow: hidden;
   }
 
   .topbar__logo {
-    width: 128px;
-    height: 26px;
+    width: 150px;
+    height: 28px;
   }
 
   .topbar__title {

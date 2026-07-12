@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import './App.css'
-import trackerLogo from './assets/tracker-retro-logo-cropped.png'
+import trackerLogo from './assets/tracker-retro.svg'
 import {
   addComment,
   createRetroUser,
