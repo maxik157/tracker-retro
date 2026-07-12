@@ -843,6 +843,7 @@ function App() {
   const [authLoading, setAuthLoading] = useState(false)
   const [authError, setAuthError] = useState<string | null>(null)
   const [createdAccessCode, setCreatedAccessCode] = useState<string | null>(null)
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false)
   const [directoryLoading, setDirectoryLoading] = useState(false)
   const [isCreateBoardOpen, setIsCreateBoardOpen] = useState(false)
   const [newBoardTitle, setNewBoardTitle] = useState('')
@@ -1188,6 +1189,7 @@ function App() {
       setIsSortMenuOpen(false)
       setIsBoardMenuOpen(false)
       setIsCreateMenuOpen(false)
+      setIsAccountMenuOpen(false)
       setActiveColumnMenuId(null)
       setActiveCardMenuId(null)
       setActiveReactionMenuCardId(null)
@@ -1347,7 +1349,8 @@ function App() {
   const canManageBoard = isBoardOwner || accountRole === 'editor'
   const boardRoleLabel = isBoardOwner ? 'Владелец' : canManageBoard ? 'Редактор' : 'Просмотр'
   const canControlTimer = canManageBoard || board?.timer.mode === 'idle'
-  const effectiveAuthor = isAnonymousAuthor ? 'Анонимно' : author.trim() || 'Участник'
+  const displayAuthor = currentUser?.name || author.trim() || 'Гость'
+  const effectiveAuthor = isAnonymousAuthor ? 'Анонимно' : displayAuthor
 
   useEffect(() => {
     if (
@@ -1632,12 +1635,14 @@ function App() {
         writeStoredUser(user)
         setCreatedAccessCode(accessCode)
         setAuthName('')
+        setIsAccountMenuOpen(true)
       } else {
         const user = await signInRetroUser(authCode)
 
         setCurrentUser(user)
         writeStoredUser(user)
         setAuthCode('')
+        setIsAccountMenuOpen(false)
       }
     } catch (authSubmitError) {
       setAuthError(
@@ -1653,6 +1658,57 @@ function App() {
     writeStoredUser(null)
     setCreatedAccessCode(null)
     setAuthCode('')
+    setIsAccountMenuOpen(true)
+  }
+
+  function renderBoardAccountMenu() {
+    return (
+      <div className="account-menu" data-menu-root="true">
+        <button
+          type="button"
+          className="account-status account-status--button"
+          title={currentUser ? currentUser.name : 'Гость'}
+          aria-haspopup="dialog"
+          aria-expanded={isAccountMenuOpen}
+          onClick={() => setIsAccountMenuOpen((current) => !current)}
+        >
+          <i className={currentUser ? 'ri-user-line' : 'ri-user-smile-line'} aria-hidden="true" />
+          <span>{currentUser ? currentUser.name : 'Гость'}</span>
+          <small>{boardRoleLabel}</small>
+        </button>
+
+        {isAccountMenuOpen ? (
+          <div className="account-popover" role="dialog" aria-label="Аккаунт">
+            {currentUser ? (
+              <>
+                <div className="account-popover__title">{currentUser.name}</div>
+                <div className="account-popover__meta">{boardRoleLabel}</div>
+                {createdAccessCode ? (
+                  <span className="account-message account-message--inline">
+                    Код: <strong>{createdAccessCode}</strong>
+                  </span>
+                ) : null}
+                <button type="button" className="inline-secondary" onClick={handleSignOut}>
+                  Выйти
+                </button>
+              </>
+            ) : (
+              <>
+                <label className="account-field">
+                  <span>Имя на доске</span>
+                  <input
+                    value={author}
+                    onChange={(event) => setAuthor(event.target.value)}
+                    placeholder="Гость"
+                  />
+                </label>
+                {renderAccountPanel(true)}
+              </>
+            )}
+          </div>
+        ) : null}
+      </div>
+    )
   }
 
   function renderAccountPanel(compact = false) {
@@ -3095,12 +3151,7 @@ function App() {
         </form>
 
         <div className="topbar__actions">
-          <div className="account-status" title={currentUser ? currentUser.name : 'Гость'}>
-            <i className={currentUser ? 'ri-user-line' : 'ri-user-smile-line'} aria-hidden="true" />
-            <span>{currentUser ? currentUser.name : 'Гость'}</span>
-            <small>{boardRoleLabel}</small>
-          </div>
-          {renderAccountPanel(true)}
+          {renderBoardAccountMenu()}
           <div className="board-stats-eye" data-menu-root="true">
             <button type="button" className="topbar-icon-button" aria-label="Статистика доски">
               <i className="ri-eye-line" aria-hidden="true" />
@@ -3137,22 +3188,18 @@ function App() {
               .filter(Boolean)
               .join(' ')}
             aria-pressed={isAnonymousAuthor}
+            title={
+              isAnonymousAuthor
+                ? 'Новые карточки будут без имени'
+                : `Новые карточки будут от имени ${displayAuthor}`
+            }
             onClick={() => setIsAnonymousAuthor((current) => !current)}
           >
             <span className="author-mode-switch__track">
               <span className="author-mode-switch__thumb" />
             </span>
-            <span>{isAnonymousAuthor ? 'Анонимно' : 'С именем'}</span>
+            <span>{isAnonymousAuthor ? 'Анонимно' : displayAuthor}</span>
           </button>
-          <label className="topbar-user">
-            <i className="ri-edit-line" aria-hidden="true" />
-            <input
-              value={author}
-              disabled={isAnonymousAuthor}
-              onChange={(event) => setAuthor(event.target.value)}
-              placeholder="Ваше имя"
-            />
-          </label>
         </div>
       </header>
 
