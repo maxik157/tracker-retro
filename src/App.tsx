@@ -1666,15 +1666,14 @@ function App() {
       <div className="account-menu" data-menu-root="true">
         <button
           type="button"
-          className="account-status account-status--button"
+          className="account-status account-status--button account-status--icon"
           title={currentUser ? currentUser.name : 'Гость'}
           aria-haspopup="dialog"
           aria-expanded={isAccountMenuOpen}
           onClick={() => setIsAccountMenuOpen((current) => !current)}
         >
           <i className={currentUser ? 'ri-user-line' : 'ri-user-smile-line'} aria-hidden="true" />
-          <span>{currentUser ? currentUser.name : 'Гость'}</span>
-          <small>{boardRoleLabel}</small>
+          <span className="sr-only">{currentUser ? currentUser.name : 'Гость'}</span>
         </button>
 
         {isAccountMenuOpen ? (
@@ -1694,19 +1693,105 @@ function App() {
               </>
             ) : (
               <>
-                <label className="account-field">
-                  <span>Имя на доске</span>
-                  <input
-                    value={author}
-                    onChange={(event) => setAuthor(event.target.value)}
-                    placeholder="Гость"
-                  />
-                </label>
                 {renderAccountPanel(true)}
               </>
             )}
           </div>
         ) : null}
+      </div>
+    )
+  }
+
+  function renderAuthorControl() {
+    if (currentUser) {
+      return (
+        <button
+          type="button"
+          className={[
+            'author-mode-switch',
+            'author-mode-switch--signed',
+            isAnonymousAuthor ? 'is-anonymous' : '',
+          ]
+            .filter(Boolean)
+            .join(' ')}
+          aria-pressed={isAnonymousAuthor}
+          title={
+            isAnonymousAuthor
+              ? 'Новые карточки будут без имени'
+              : `Новые карточки будут от имени ${displayAuthor}`
+          }
+          onClick={() => setIsAnonymousAuthor((current) => !current)}
+        >
+          <span className="author-mode-switch__track">
+            <span className="author-mode-switch__thumb" />
+          </span>
+          <span>{isAnonymousAuthor ? 'Анонимно' : 'Имя видно'}</span>
+        </button>
+      )
+    }
+
+    return (
+      <div className="guest-author-control">
+        <label className="guest-author-field" title="Имя для новых карточек">
+          <span className="sr-only">Имя для новых карточек</span>
+          <input
+            value={author}
+            disabled={isAnonymousAuthor}
+            onChange={(event) => setAuthor(event.target.value)}
+            placeholder="Ваше имя"
+          />
+        </label>
+        <button
+          type="button"
+          className={[
+            'author-anonymous-button',
+            isAnonymousAuthor ? 'is-anonymous' : '',
+          ]
+            .filter(Boolean)
+            .join(' ')}
+          aria-pressed={isAnonymousAuthor}
+          title={
+            isAnonymousAuthor
+              ? 'Новые карточки будут без имени'
+              : `Новые карточки будут от имени ${displayAuthor}`
+          }
+          onClick={() => setIsAnonymousAuthor((current) => !current)}
+        >
+          <i className={isAnonymousAuthor ? 'ri-eye-off-line' : 'ri-eye-line'} aria-hidden="true" />
+          <span className="sr-only">{isAnonymousAuthor ? 'Анонимно' : 'Имя видно'}</span>
+        </button>
+      </div>
+    )
+  }
+
+  function renderBoardStatsEye() {
+    return (
+      <div className="board-stats-eye" data-menu-root="true">
+        <button type="button" className="topbar-icon-button" aria-label="Статистика доски">
+          <i className="ri-eye-line" aria-hidden="true" />
+        </button>
+        <div className="board-stats-popover" role="tooltip">
+          <div>
+            <strong>{boardStats.cardsCount}</strong>
+            <span>Карточек</span>
+          </div>
+          <div>
+            <strong>{boardStats.totalVotes}</strong>
+            <span>Голосов</span>
+          </div>
+          <div>
+            <strong>{boardStats.participantVotes}</strong>
+            <span>Ваших голосов</span>
+          </div>
+          <div>
+            <strong>{boardStats.votersCount}</strong>
+            <span>Участников</span>
+          </div>
+          <div>
+            <strong>{boardStats.remainingVotes}</strong>
+            <span>Осталось голосов</span>
+          </div>
+        </div>
       </div>
     )
   }
@@ -3151,55 +3236,8 @@ function App() {
         </form>
 
         <div className="topbar__actions">
+          {renderAuthorControl()}
           {renderBoardAccountMenu()}
-          <div className="board-stats-eye" data-menu-root="true">
-            <button type="button" className="topbar-icon-button" aria-label="Статистика доски">
-              <i className="ri-eye-line" aria-hidden="true" />
-            </button>
-            <div className="board-stats-popover" role="tooltip">
-              <div>
-                <strong>{boardStats.cardsCount}</strong>
-                <span>Карточек</span>
-              </div>
-              <div>
-                <strong>{boardStats.totalVotes}</strong>
-                <span>Голосов</span>
-              </div>
-              <div>
-                <strong>{boardStats.participantVotes}</strong>
-                <span>Ваших голосов</span>
-              </div>
-              <div>
-                <strong>{boardStats.votersCount}</strong>
-                <span>Участников</span>
-              </div>
-              <div>
-                <strong>{boardStats.remainingVotes}</strong>
-                <span>Осталось голосов</span>
-              </div>
-            </div>
-          </div>
-          <button
-            type="button"
-            className={[
-              'author-mode-switch',
-              isAnonymousAuthor ? 'is-anonymous' : '',
-            ]
-              .filter(Boolean)
-              .join(' ')}
-            aria-pressed={isAnonymousAuthor}
-            title={
-              isAnonymousAuthor
-                ? 'Новые карточки будут без имени'
-                : `Новые карточки будут от имени ${displayAuthor}`
-            }
-            onClick={() => setIsAnonymousAuthor((current) => !current)}
-          >
-            <span className="author-mode-switch__track">
-              <span className="author-mode-switch__thumb" />
-            </span>
-            <span>{isAnonymousAuthor ? 'Анонимно' : displayAuthor}</span>
-          </button>
         </div>
       </header>
 
@@ -3438,6 +3476,7 @@ function App() {
         </div>
 
         <div className="board-controls__right">
+          {renderBoardStatsEye()}
           <button type="button" className="inline-secondary" onClick={() => void handleCopyLink()}>
             <i className="ri-share-forward-fill" aria-hidden="true" />
             {copiedLink ? 'Ссылка скопирована' : 'Поделиться'}
@@ -4369,8 +4408,20 @@ function App() {
                       <div className="solution-item__main">
                         {resolution.status === 'resolved' ? <SolutionFirework /> : null}
                         <div className="solution-item__header">
-                          <div>
+                          <div className="solution-item__title">
                             <h3>{card.content}</h3>
+                            {sections.length > 1 ? (
+                              <div className="solution-sources" aria-label="Объединенные карточки">
+                                <span className="solution-sources__count">
+                                  Объединено: {sections.length}
+                                </span>
+                                <div className="solution-sources__list">
+                                  {sections.slice(1).map((section) => (
+                                    <span key={section.id}>{section.content}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : null}
                           </div>
                           <div className="solution-item__header-actions">
                             <div
@@ -4432,14 +4483,6 @@ function App() {
                             </div>
                           </div>
                         </div>
-
-                        {sections.length > 1 ? (
-                          <div className="solution-sources">
-                            {sections.map((section) => (
-                              <span key={section.id}>{section.content}</span>
-                            ))}
-                          </div>
-                        ) : null}
 
                         <div className="solution-editor-row">
                           <label className="solution-summary">
@@ -4595,10 +4638,15 @@ function App() {
               </div>
             ) : (
               <div className="solutions-empty">
-                <i className="ri-drag-drop-line" aria-hidden="true" />
-                <p>
-                  Перетащите карточку в последнюю колонку, и здесь появится план решения.
-                </p>
+                <div className="solutions-empty__visual" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
+                </div>
+                <div className="solutions-empty__copy">
+                  <h3>Решения пока не начаты</h3>
+                  <p>Когда появится первая карточка, здесь будет аккуратный список решений.</p>
+                </div>
               </div>
             )}
           </section>
