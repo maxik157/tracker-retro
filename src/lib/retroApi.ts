@@ -48,6 +48,25 @@ const defaultColumns: RetroColumn[] = [
   },
 ]
 
+const previewToneAccents: Record<string, string> = {
+  green: '#18c29c',
+  pink: '#ff5c93',
+  violet: '#8b6ff5',
+  yellow: '#f4c94f',
+  blue: '#4e8df5',
+  teal: '#16b8b0',
+  orange: '#f28b3c',
+  red: '#e74f5f',
+  lime: '#9bcc38',
+  cyan: '#27b7d9',
+  indigo: '#5b6ee1',
+  purple: '#9b5de5',
+  rose: '#f05d8a',
+  amber: '#f5a524',
+  slate: '#64748b',
+  mint: '#43c6a0',
+}
+
 const defaultBoardSettings: RetroBoardSettings = {
   showAuthors: false,
   showCardDate: false,
@@ -372,14 +391,53 @@ async function patchBoard(boardId: string, patch: Record<string, unknown>) {
   })
 }
 
+function getPreviewCardHeightUnits(card: RetroCard) {
+  const mergedContentLength = (card.mergedCards || []).reduce(
+    (total, mergedCard) => total + mergedCard.content.length,
+    0,
+  )
+  const contentLength = card.content.length + mergedContentLength
+  const contentUnits = Math.ceil(contentLength / 90) * 0.28
+  const mergedUnits = (card.mergedCards?.length || 0) * 0.35
+  const mediaUnits = card.gifUrl ? 0.45 : 0
+
+  return Math.min(2.7, Math.max(1, 1 + contentUnits + mergedUnits + mediaUnits))
+}
+
+function getPreviewColumnAccent(column: RetroColumn) {
+  return (column.cardColor && previewToneAccents[column.cardColor]) || column.accent || '#b7c0d2'
+}
+
 function boardToDirectoryItem(board: RetroBoard): RetroBoardDirectoryItem {
+  const sortedColumns = Object.values(board.columns).sort((left, right) => left.order - right.order)
+  const activeCards = Object.values(board.cards || {})
+  const preview = sortedColumns.map((column) => ({
+    id: column.id,
+    accent: getPreviewColumnAccent(column),
+    cardColor: column.cardColor,
+    cardsCount: activeCards.filter((card) => card.columnId === column.id).length,
+    cards: activeCards
+      .filter((card) => card.columnId === column.id)
+      .sort((left, right) => left.order - right.order)
+      .slice(0, 4)
+      .map((card) => ({
+        id: card.id,
+        color: column.cardColor ?? card.color ?? null,
+        heightUnits: getPreviewCardHeightUnits(card),
+      })),
+  }))
+
   return {
     id: board.id,
     title: board.title,
     createdAt: board.createdAt,
     updatedAt: board.updatedAt,
+    ownerId: board.ownerId,
     ownerUserId: board.access.ownerUserId || '',
+    members: board.access.members || {},
     visibility: board.access.visibility || 'public',
+    cardsCount: activeCards.length,
+    preview,
   }
 }
 
@@ -412,8 +470,21 @@ export async function fetchBoardDirectory() {
       title: item?.title || 'Ретроспектива команды',
       createdAt: item?.createdAt || item?.updatedAt || nowIso(),
       updatedAt: item?.updatedAt || nowIso(),
+      ownerId: item?.ownerId || '',
       ownerUserId: item?.ownerUserId || '',
+      members: item?.members || {},
       visibility: 'public',
+      cardsCount: item?.cardsCount || 0,
+      preview: Array.isArray(item?.preview)
+        ? item.preview.map((column) => ({
+            ...column,
+            cardsCount:
+              typeof column.cardsCount === 'number'
+                ? column.cardsCount
+                : column.cards?.length || 0,
+            cards: Array.isArray(column.cards) ? column.cards : [],
+          }))
+        : [],
     })
   })
 
@@ -436,8 +507,68 @@ export async function fetchBoardDirectory() {
   }
 
   return Array.from(itemsById.values()).sort(
-    (left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
+    (left, right) =>
+      new Date(right.createdAt || right.updatedAt).getTime() -
+      new Date(left.createdAt || left.updatedAt).getTime(),
   )
+}
+
+export async function cloneBoard(
+  sourceBoardId: string,
+  nextBoardId: string,
+  ownerId = '',
+  ownerUser?: RetroUser | null,
+) {
+  const sourceBoard = await fetchBoard(sourceBoardId)
+
+  if (!sourceBoard) {
+    throw new Error('Исходная доска не найдена.')
+  }
+
+  const timestamp = nowIso()
+  const ownerUserId = ownerUser?.id || ''
+  const access: RetroBoardAccess = {
+    visibility: sourceBoard.access.visibility,
+    ownerUserId,
+    members: ownerUser
+      ? {
+          [ownerUser.id]: {
+            role: 'owner',
+            displayName: ownerUser.name,
+            addedAt: timestamp,
+          },
+        }
+      : {},
+  }
+  const clonedBoard: RetroBoard = {
+    ...sourceBoard,
+    id: nextBoardId,
+    ownerId,
+    access,
+    title: `${sourceBoard.title || 'Ретроспектива команды'} клон`,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    timer: {
+      ...sourceBoard.timer,
+      mode: 'idle',
+      startedAt: null,
+    },
+  }
+
+  await putBoard(nextBoardId, clonedBoard)
+  await upsertBoardDirectory(clonedBoard)
+  return clonedBoard
+}
+
+export async function deleteBoard(boardId: string) {
+  await Promise.all([
+    request(getBoardPath(boardId), {
+      method: 'DELETE',
+    }),
+    request(getDirectoryPath(boardId), {
+      method: 'DELETE',
+    }),
+  ])
 }
 
 export async function createRetroUser(name: string) {

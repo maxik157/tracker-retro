@@ -50,8 +50,26 @@ export interface RetroBoardDirectoryItem {
   title: string
   createdAt?: string
   updatedAt: string
+  ownerId?: string
   ownerUserId: string
+  members?: Record<string, RetroBoardMember>
   visibility: 'public' | 'private'
+  cardsCount?: number
+  preview?: RetroBoardDirectoryPreviewColumn[]
+}
+
+export interface RetroBoardDirectoryPreviewCard {
+  id: string
+  color: string | null
+  heightUnits?: number
+}
+
+export interface RetroBoardDirectoryPreviewColumn {
+  id: string
+  accent: string
+  cardColor: string | null
+  cardsCount?: number
+  cards: RetroBoardDirectoryPreviewCard[]
 }
 
 export interface RetroComment {

@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { FormEvent } from 'react'
+import type { CSSProperties, FormEvent, PointerEvent } from 'react'
 import './App.css'
 import trackerLogo from './assets/tracker-retro.svg'
 import {
   addComment,
+  cloneBoard,
   createRetroUser,
   createCard,
   createColumn,
+  deleteBoard,
   deleteColumn,
   deleteAllCards,
   deleteCard,
@@ -33,6 +35,7 @@ import type {
   RetroBoard,
   RetroBoardAccess,
   RetroBoardDirectoryItem,
+  RetroBoardRole,
   RetroBoardSettings,
   RetroCard,
   RetroColumn,
@@ -63,6 +66,24 @@ type ColumnDragState = {
   overColumnId: string | null
   dropPosition: 'before' | 'after' | null
 } | null
+type MobileCardDragState = {
+  cardId: string
+  pointerId: number
+  x: number
+  y: number
+  offsetX: number
+  offsetY: number
+  width: number
+  height: number
+  overColumnId: string | null
+  overCardId: string | null
+  dropPosition: 'before' | 'after' | null
+} | null
+type MobileCardDragTarget = {
+  overColumnId: string | null
+  overCardId: string | null
+  dropPosition: 'before' | 'after' | null
+}
 type ResolutionStepDragState = {
   cardId: string
   stepId: string
@@ -132,7 +153,6 @@ function normalizeKlipyResults(results: KlipyApiResult[]): KlipyGif[] {
 type WorkspaceView = 'board' | 'solutions'
 type ProblemStatus = RetroProblemResolution['status']
 
-const BOARD_LIST_STORAGE_KEY = 'retro-board-list'
 const AUTH_USER_STORAGE_KEY = 'retro-user'
 const SORT_STORAGE_PREFIX = 'retro-local-sort'
 const AUTHOR_STORAGE_PREFIX = 'retro-board-author'
@@ -194,6 +214,25 @@ const cardPalette = [
   { id: 'slate', label: 'Графит', className: 'card-tone-slate' },
   { id: 'mint', label: 'Мята', className: 'card-tone-mint' },
 ] as const
+
+const previewToneAccents: Record<string, string> = {
+  green: '#18c29c',
+  pink: '#ff5c93',
+  violet: '#8b6ff5',
+  yellow: '#f4c94f',
+  blue: '#4e8df5',
+  teal: '#16b8b0',
+  orange: '#f28b3c',
+  red: '#e74f5f',
+  lime: '#9bcc38',
+  cyan: '#27b7d9',
+  indigo: '#5b6ee1',
+  purple: '#9b5de5',
+  rose: '#f05d8a',
+  amber: '#f5a524',
+  slate: '#64748b',
+  mint: '#43c6a0',
+}
 
 const reactionOptions = ['👍', '❤️', '🎉', '🔥', '👏', '💡', '🚀', '✅', '👀', '🙌'] as const
 
@@ -263,6 +302,14 @@ function formatTimestamp(value: string) {
     month: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
+  }).format(new Date(value))
+}
+
+function formatBoardDate(value: string) {
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
   }).format(new Date(value))
 }
 
@@ -451,13 +498,131 @@ function normalizeBoardListItem(item: Partial<BoardListItem>): BoardListItem | n
     return null
   }
 
+  const preview = Array.isArray(item.preview)
+    ? item.preview.map((column) => ({
+        ...column,
+        cardsCount:
+          typeof column.cardsCount === 'number' ? column.cardsCount : column.cards?.length || 0,
+        cards: Array.isArray(column.cards) ? column.cards : [],
+      }))
+    : []
+
   return {
     id: item.id,
     title: item.title || 'Ретроспектива команды',
     createdAt: item.createdAt || item.updatedAt || nowIso(),
     updatedAt: item.updatedAt || nowIso(),
+    ownerId: item.ownerId || '',
     ownerUserId: item.ownerUserId || '',
+    members: item.members || {},
     visibility: item.visibility || 'public',
+    cardsCount: item.cardsCount || 0,
+    preview,
+  }
+}
+
+function getPreviewCardHeightUnits(card: RetroCard) {
+  const mergedContentLength = (card.mergedCards || []).reduce(
+    (total, mergedCard) => total + mergedCard.content.length,
+    0,
+  )
+  const contentLength = card.content.length + mergedContentLength
+  const contentUnits = Math.ceil(contentLength / 90) * 0.28
+  const mergedUnits = (card.mergedCards?.length || 0) * 0.35
+  const mediaUnits = card.gifUrl ? 0.45 : 0
+
+  return Math.min(2.7, Math.max(1, 1 + contentUnits + mergedUnits + mediaUnits))
+}
+
+function getPreviewColumnAccent(column: RetroColumn) {
+  return (column.cardColor && previewToneAccents[column.cardColor]) || column.accent || '#b7c0d2'
+}
+
+function getBoardListItemFromBoard(board: RetroBoard): BoardListItem {
+  const sortedColumns = Object.values(board.columns).sort((left, right) => left.order - right.order)
+  const activeCards = Object.values(board.cards || {})
+
+  return {
+    id: board.id,
+    title: board.title,
+    createdAt: board.createdAt,
+    updatedAt: board.updatedAt,
+    ownerId: board.ownerId,
+    ownerUserId: board.access.ownerUserId,
+    members: board.access.members,
+    visibility: board.access.visibility,
+    cardsCount: activeCards.length,
+    preview: sortedColumns.map((column) => ({
+      id: column.id,
+      accent: getPreviewColumnAccent(column),
+      cardColor: column.cardColor,
+      cardsCount: activeCards.filter((card) => card.columnId === column.id).length,
+      cards: activeCards
+        .filter((card) => card.columnId === column.id)
+        .sort((left, right) => left.order - right.order)
+        .slice(0, 4)
+        .map((card) => ({
+          id: card.id,
+          color: column.cardColor ?? card.color ?? null,
+          heightUnits: getPreviewCardHeightUnits(card),
+        })),
+    })),
+  }
+}
+
+function getCardCountLabel(count: number) {
+  const absoluteCount = Math.abs(count)
+  const lastTwoDigits = absoluteCount % 100
+  const lastDigit = absoluteCount % 10
+
+  if (lastTwoDigits >= 11 && lastTwoDigits <= 14) {
+    return `${count} карточек`
+  }
+
+  if (lastDigit === 1) {
+    return `${count} карточка`
+  }
+
+  if (lastDigit >= 2 && lastDigit <= 4) {
+    return `${count} карточки`
+  }
+
+  return `${count} карточек`
+}
+
+function getBoardListRole(
+  item: BoardListItem,
+  currentUser: RetroUser | null,
+  participantId: string,
+): RetroBoardRole | 'user' {
+  const memberRole = currentUser?.id ? item.members?.[currentUser.id]?.role : null
+
+  if (
+    memberRole === 'owner' ||
+    Boolean(currentUser?.id && item.ownerUserId === currentUser.id) ||
+    Boolean(!item.ownerUserId && item.ownerId && item.ownerId === participantId)
+  ) {
+    return 'owner'
+  }
+
+  if (memberRole === 'editor' || memberRole === 'viewer') {
+    return memberRole
+  }
+
+  return 'user'
+}
+
+function getBoardListRoleView(role: RetroBoardRole | 'user') {
+  switch (role) {
+    case 'owner':
+      return { label: 'Владелец', icon: 'ri-police-badge-line' }
+    case 'editor':
+      return { label: 'Редактор', icon: 'ri-edit-2-line' }
+    case 'viewer':
+      return { label: 'Просмотр', icon: 'ri-eye-line' }
+    case 'user':
+    default:
+      return { label: 'Пользователь', icon: 'ri-user-line' }
   }
 }
 
@@ -485,95 +650,48 @@ function writeStoredUser(user: RetroUser | null) {
   localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(user))
 }
 
-function readBoardList(): BoardListItem[] {
-  try {
-    const raw = localStorage.getItem(BOARD_LIST_STORAGE_KEY)
+function getBoardListCreatedTime(item: BoardListItem) {
+  const timestamp = new Date(item.createdAt || item.updatedAt).getTime()
 
-    if (!raw) {
-      return []
-    }
-
-    const parsed = JSON.parse(raw) as Array<Partial<BoardListItem>>
-    return Array.isArray(parsed)
-      ? parsed
-          .map(normalizeBoardListItem)
-          .filter((item): item is BoardListItem => Boolean(item))
-      : []
-  } catch {
-    return []
-  }
+  return Number.isFinite(timestamp) ? timestamp : 0
 }
 
-function writeBoardList(items: BoardListItem[]) {
-  localStorage.setItem(BOARD_LIST_STORAGE_KEY, JSON.stringify(items))
-}
+function sortBoardListByCreated(items: BoardListItem[]) {
+  return [...items].sort((left, right) => {
+    const createdDiff = getBoardListCreatedTime(right) - getBoardListCreatedTime(left)
 
-function mergeBoardLists(localItems: BoardListItem[], remoteItems: BoardListItem[]) {
-  const byId = new Map<string, BoardListItem>()
-
-  ;[...remoteItems, ...localItems].forEach((item) => {
-    const normalized = normalizeBoardListItem(item)
-
-    if (!normalized) {
-      return
+    if (createdDiff !== 0) {
+      return createdDiff
     }
 
-    const current = byId.get(normalized.id)
-
-    if (
-      !current ||
-      new Date(normalized.updatedAt).getTime() >= new Date(current.updatedAt).getTime()
-    ) {
-      byId.set(normalized.id, normalized)
-    }
+    return left.id.localeCompare(right.id)
   })
-
-  return Array.from(byId.values())
-    .sort(
-      (left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
-    )
-    .slice(0, 48)
 }
 
-function upsertBoardListItem(item: BoardListItem) {
+function normalizeBoardListItems(items: BoardListItem[]) {
+  return sortBoardListByCreated(
+    items
+      .map(normalizeBoardListItem)
+      .filter((item): item is BoardListItem => Boolean(item)),
+  ).slice(0, 48)
+}
+
+function upsertBoardListItem(items: BoardListItem[], item: BoardListItem) {
   const normalized = normalizeBoardListItem(item)
 
   if (!normalized) {
-    return readBoardList()
+    return items
   }
 
-  const currentItems = readBoardList()
-  const existingIndex = currentItems.findIndex((boardItem) => boardItem.id === normalized.id)
+  const existingIndex = items.findIndex((boardItem) => boardItem.id === normalized.id)
   const nextItems =
     existingIndex >= 0
-      ? currentItems.map((boardItem) =>
+      ? items.map((boardItem) =>
           boardItem.id === normalized.id ? normalized : boardItem,
         )
-      : [normalized, ...currentItems]
+      : [normalized, ...items]
 
-  const limitedItems = nextItems.slice(0, 48)
-
-  writeBoardList(limitedItems)
-  return limitedItems
-}
-
-function moveBoardListItem(items: BoardListItem[], sourceId: string, targetId: string) {
-  if (sourceId === targetId) {
-    return items
-  }
-
-  const sourceIndex = items.findIndex((item) => item.id === sourceId)
-  const targetIndex = items.findIndex((item) => item.id === targetId)
-
-  if (sourceIndex < 0 || targetIndex < 0) {
-    return items
-  }
-
-  const nextItems = [...items]
-  const [movingItem] = nextItems.splice(sourceIndex, 1)
-  nextItems.splice(targetIndex, 0, movingItem)
-
-  return nextItems
+  return normalizeBoardListItems(nextItems)
 }
 
 function createCardDragImage(cardElement: HTMLElement) {
@@ -836,7 +954,7 @@ function getWorkspaceViewFromUrl(): WorkspaceView {
 function App() {
   const [boardId, setBoardId] = useState<string | null>(() => getBoardId())
   const [participantId] = useState(() => getParticipantId())
-  const [boardList, setBoardList] = useState<BoardListItem[]>(() => readBoardList())
+  const [boardList, setBoardList] = useState<BoardListItem[]>([])
   const [currentUser, setCurrentUser] = useState<RetroUser | null>(() => readStoredUser())
   const [authMode, setAuthMode] = useState<AuthMode>('sign-in')
   const [authName, setAuthName] = useState('')
@@ -886,6 +1004,8 @@ function App() {
   const [isPollVotingOpen, setIsPollVotingOpen] = useState(false)
   const [showPollResults, setShowPollResults] = useState(false)
   const [copiedLink, setCopiedLink] = useState(false)
+  const [copiedBoardId, setCopiedBoardId] = useState<string | null>(null)
+  const [boardDeleteCandidate, setBoardDeleteCandidate] = useState<BoardListItem | null>(null)
   const [remainingSeconds, setRemainingSeconds] = useState(0)
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false)
   const [isBoardMenuOpen, setIsBoardMenuOpen] = useState(false)
@@ -901,7 +1021,7 @@ function App() {
   const [gifError, setGifError] = useState<string | null>(null)
   const [voteLimitWarning, setVoteLimitWarning] = useState<string | null>(null)
   const [selectedMobileColumnId, setSelectedMobileColumnId] = useState<string | null>(null)
-  const [boardListDragId, setBoardListDragId] = useState<string | null>(null)
+  const [mobileCardDrag, setMobileCardDrag] = useState<MobileCardDragState>(null)
   const [dragState, setDragState] = useState<DragState>(null)
   const [columnDragState, setColumnDragState] = useState<ColumnDragState>(null)
   const [resolutionStepDragState, setResolutionStepDragState] =
@@ -914,6 +1034,8 @@ function App() {
   const savingRef = useRef(false)
   const timerAlarmPlayedRef = useRef(false)
   const cardDragImageRef = useRef<HTMLElement | null>(null)
+  const mobileLongPressTimerRef = useRef<number | null>(null)
+  const mobileLongPressStartRef = useRef<{ x: number; y: number; cardId: string } | null>(null)
 
   useEffect(() => {
     isEditingTitleRef.current = isEditingTitle
@@ -922,6 +1044,16 @@ function App() {
   useEffect(() => {
     savingRef.current = saving
   }, [saving])
+
+  useEffect(() => {
+    return () => {
+      if (mobileLongPressTimerRef.current) {
+        window.clearTimeout(mobileLongPressTimerRef.current)
+      }
+
+      document.body.classList.remove('is-mobile-card-dragging')
+    }
+  }, [])
 
   useEffect(() => {
     if (!voteLimitWarning) {
@@ -944,9 +1076,7 @@ function App() {
           return
         }
 
-        const nextItems = mergeBoardLists(readBoardList(), items)
-        writeBoardList(nextItems)
-        setBoardList(nextItems)
+        setBoardList(normalizeBoardListItems(items))
       })
       .catch((directoryError) => {
         console.error(directoryError)
@@ -995,15 +1125,8 @@ function App() {
 
   function syncBoardState(nextBoard: RetroBoard) {
     setBoard(nextBoard)
-    setBoardList(
-      upsertBoardListItem({
-        id: nextBoard.id,
-        title: nextBoard.title,
-        createdAt: nextBoard.createdAt,
-        updatedAt: nextBoard.updatedAt,
-        ownerUserId: nextBoard.access.ownerUserId,
-        visibility: nextBoard.access.visibility,
-      }),
+    setBoardList((currentItems) =>
+      upsertBoardListItem(currentItems, getBoardListItemFromBoard(nextBoard)),
     )
     setSettings(mergeSettings(nextBoard.settings))
     setBoardTitle((currentTitle) =>
@@ -1319,10 +1442,10 @@ function App() {
     return voters.size
   }, [board?.poll, pollOptions])
   const activeMobileColumnId = selectedMobileColumnId || columns[0]?.id || null
-  const visibleColumns =
-    isCompactView && activeMobileColumnId
-      ? columns.filter((column) => column.id === activeMobileColumnId)
-      : columns
+  const visibleColumns = columns
+  const mobileDraggedCard = mobileCardDrag
+    ? board?.cards[mobileCardDrag.cardId] || null
+    : null
   const actionColumn = columns[columns.length - 1] || null
   const actionCards = useMemo(() => {
     if (!actionColumn) {
@@ -1447,6 +1570,214 @@ function App() {
     setGifForTarget(target, null)
   }
 
+  function cancelMobileCardLongPress() {
+    if (mobileLongPressTimerRef.current) {
+      window.clearTimeout(mobileLongPressTimerRef.current)
+      mobileLongPressTimerRef.current = null
+    }
+
+    mobileLongPressStartRef.current = null
+  }
+
+  function getMobileCardDragTarget(
+    clientX: number,
+    clientY: number,
+    movingCardId: string,
+  ): MobileCardDragTarget {
+    const ghostElement = document.querySelector<HTMLElement>('.mobile-card-drag-ghost')
+    const previousGhostVisibility = ghostElement?.style.visibility
+
+    if (ghostElement) {
+      ghostElement.style.visibility = 'hidden'
+    }
+
+    const targetElement = document.elementFromPoint(clientX, clientY) as HTMLElement | null
+
+    if (ghostElement) {
+      ghostElement.style.visibility = previousGhostVisibility || ''
+    }
+
+    const cardElement = targetElement?.closest<HTMLElement>('[data-card-id]')
+    const columnElement = targetElement?.closest<HTMLElement>('[data-column-id]')
+    const overCardId = cardElement?.dataset.cardId || null
+    const overColumnId =
+      cardElement?.closest<HTMLElement>('[data-column-id]')?.dataset.columnId ||
+      columnElement?.dataset.columnId ||
+      null
+
+    if (overCardId === movingCardId) {
+      return {
+        overColumnId: null,
+        overCardId: null,
+        dropPosition: null,
+      }
+    }
+
+    if (overCardId && cardElement) {
+      const rect = cardElement.getBoundingClientRect()
+      return {
+        overColumnId,
+        overCardId,
+        dropPosition: clientY < rect.top + rect.height / 2 ? 'before' : 'after',
+      }
+    }
+
+    return {
+      overColumnId,
+      overCardId: null,
+      dropPosition: null,
+    }
+  }
+
+  function scrollMobileColumnsNearEdge(clientX: number) {
+    const scroller = document.querySelector<HTMLElement>('.columns-grid')
+
+    if (!scroller) {
+      return
+    }
+
+    const rect = scroller.getBoundingClientRect()
+    const edgeSize = 52
+
+    if (clientX < rect.left + edgeSize) {
+      scroller.scrollLeft -= 22
+    } else if (clientX > rect.right - edgeSize) {
+      scroller.scrollLeft += 22
+    }
+  }
+
+  function beginMobileCardLongPress(
+    event: PointerEvent<HTMLElement>,
+    card: RetroCard,
+    canMoveCurrentCard: boolean,
+    isEditing: boolean,
+  ) {
+    const target = event.target as HTMLElement
+    const isInteractiveTarget = Boolean(
+      target.closest('button, input, textarea, a, select, [data-menu-root="true"]'),
+    )
+
+    if (
+      !isCompactView ||
+      !canMoveCurrentCard ||
+      isEditing ||
+      mobileCardDrag ||
+      event.pointerType === 'mouse' ||
+      isInteractiveTarget
+    ) {
+      return
+    }
+
+    cancelMobileCardLongPress()
+    const cardRect = event.currentTarget.getBoundingClientRect()
+    const cardElement = event.currentTarget
+    const pointerId = event.pointerId
+    const startX = event.clientX
+    const startY = event.clientY
+
+    mobileLongPressStartRef.current = {
+      x: startX,
+      y: startY,
+      cardId: card.id,
+    }
+
+    mobileLongPressTimerRef.current = window.setTimeout(() => {
+      cardElement.setPointerCapture?.(pointerId)
+      document.body.classList.add('is-mobile-card-dragging')
+      setMobileCardDrag({
+        cardId: card.id,
+        pointerId,
+        x: startX,
+        y: startY,
+        offsetX: startX - cardRect.left,
+        offsetY: startY - cardRect.top,
+        width: cardRect.width,
+        height: cardRect.height,
+        overColumnId: null,
+        overCardId: null,
+        dropPosition: null,
+      })
+      setDragState(null)
+      setActiveCardMenuId(null)
+      setActiveReactionMenuCardId(null)
+      mobileLongPressTimerRef.current = null
+      navigator.vibrate?.(18)
+    }, 480)
+  }
+
+  function updateMobileCardLongPress(event: PointerEvent<HTMLElement>) {
+    if (mobileCardDrag && mobileCardDrag.pointerId === event.pointerId) {
+      event.preventDefault()
+      scrollMobileColumnsNearEdge(event.clientX)
+      const target = getMobileCardDragTarget(
+        event.clientX,
+        event.clientY,
+        mobileCardDrag.cardId,
+      )
+
+      setMobileCardDrag((current) =>
+        current && current.pointerId === event.pointerId
+          ? {
+              ...current,
+              x: event.clientX,
+              y: event.clientY,
+              ...target,
+            }
+          : current,
+      )
+      return
+    }
+
+    const start = mobileLongPressStartRef.current
+
+    if (!start) {
+      return
+    }
+
+    const distance = Math.hypot(event.clientX - start.x, event.clientY - start.y)
+
+    if (distance > 32) {
+      cancelMobileCardLongPress()
+    }
+  }
+
+  async function finishMobileCardDrag(event: PointerEvent<HTMLElement>) {
+    cancelMobileCardLongPress()
+
+    if (!mobileCardDrag || mobileCardDrag.pointerId !== event.pointerId) {
+      return
+    }
+
+    event.preventDefault()
+    event.currentTarget.releasePointerCapture?.(event.pointerId)
+
+    const finalTarget = getMobileCardDragTarget(
+      event.clientX,
+      event.clientY,
+      mobileCardDrag.cardId,
+    )
+    const nextMove = {
+      cardId: mobileCardDrag.cardId,
+      overColumnId: finalTarget.overColumnId || mobileCardDrag.overColumnId,
+      overCardId: finalTarget.overCardId || mobileCardDrag.overCardId,
+      dropPosition: finalTarget.dropPosition || mobileCardDrag.dropPosition,
+    }
+
+    document.body.classList.remove('is-mobile-card-dragging')
+    setMobileCardDrag(null)
+
+    if (!nextMove.overColumnId) {
+      return
+    }
+
+    await handleMoveCard(
+      nextMove.cardId,
+      nextMove.overColumnId,
+      nextMove.overCardId,
+      nextMove.dropPosition || 'after',
+    )
+  }
+
   function renderGifControls(target: GifPickerTarget) {
     if (!settings.allowGifs) {
       return null
@@ -1545,33 +1876,58 @@ function App() {
     setBoardId(null)
   }
 
-  function persistBoardList(nextItems: BoardListItem[]) {
-    writeBoardList(nextItems)
-    setBoardList(nextItems)
+  async function handleDeleteBoardFromList(boardItem: BoardListItem) {
+    setSaving(true)
+    setError(null)
+
+    try {
+      await deleteBoard(boardItem.id)
+
+      const nextItems = boardList.filter((item) => item.id !== boardItem.id)
+
+      setBoardList(nextItems)
+      setBoardDeleteCandidate(null)
+
+      if (localStorage.getItem('retro-board-id') === boardItem.id) {
+        localStorage.removeItem('retro-board-id')
+      }
+
+      if (boardId === boardItem.id) {
+        openBoardList()
+      }
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'Не удалось удалить доску.')
+    } finally {
+      setSaving(false)
+    }
   }
 
-  function handleDeleteBoardFromList(boardItem: BoardListItem) {
-    const nextItems = boardList.filter((item) => item.id !== boardItem.id)
-
-    persistBoardList(nextItems)
-
-    if (localStorage.getItem('retro-board-id') === boardItem.id) {
-      localStorage.removeItem('retro-board-id')
-    }
-
-    if (boardId === boardItem.id) {
-      openBoardList()
-    }
+  async function handleShareBoardFromList(boardItem: BoardListItem) {
+    const url = new URL(window.location.href)
+    url.searchParams.set('board', boardItem.id)
+    url.searchParams.delete('view')
+    await navigator.clipboard.writeText(url.toString())
+    setCopiedBoardId(boardItem.id)
+    window.setTimeout(() => setCopiedBoardId(null), 1800)
   }
 
-  function handleDropBoardListItem(targetId: string) {
-    if (!boardListDragId || boardListDragId === targetId) {
-      setBoardListDragId(null)
-      return
-    }
+  async function handleCloneBoardFromList(boardItem: BoardListItem) {
+    const nextBoardId = buildId('board')
 
-    persistBoardList(moveBoardListItem(boardList, boardListDragId, targetId))
-    setBoardListDragId(null)
+    setSaving(true)
+    setError(null)
+
+    try {
+      const clonedBoard = await cloneBoard(boardItem.id, nextBoardId, participantId, currentUser)
+      setBoardList((currentItems) =>
+        upsertBoardListItem(currentItems, getBoardListItemFromBoard(clonedBoard)),
+      )
+      openBoard(nextBoardId)
+    } catch (cloneError) {
+      setError(cloneError instanceof Error ? cloneError.message : 'Не удалось клонировать доску.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   async function handleCreateBoardFromHome(event?: FormEvent) {
@@ -1584,22 +1940,13 @@ function App() {
     }
 
     const nextBoardId = buildId('board')
-    const createdAt = nowIso()
-
     setSaving(true)
     setError(null)
 
     try {
       const nextBoard = await seedBoard(nextBoardId, participantId, title, currentUser)
-      setBoardList(
-        upsertBoardListItem({
-          id: nextBoardId,
-          title,
-          createdAt: nextBoard.createdAt || createdAt,
-          updatedAt: nextBoard.updatedAt || createdAt,
-          ownerUserId: nextBoard.access.ownerUserId,
-          visibility: nextBoard.access.visibility,
-        }),
+      setBoardList((currentItems) =>
+        upsertBoardListItem(currentItems, getBoardListItemFromBoard(nextBoard)),
       )
       setNewBoardTitle('')
       setIsCreateBoardOpen(false)
@@ -3115,58 +3462,117 @@ function App() {
           {boardList.length ? (
             <div className="home-board-grid">
               {boardList.map((item) => {
-                const boardAccessLabel =
-                  currentUser?.id && item.ownerUserId === currentUser.id
-                    ? 'Владелец'
-                    : 'Пользователь'
+                const boardListRole = getBoardListRole(item, currentUser, participantId)
+                const boardRoleView = getBoardListRoleView(boardListRole)
+                const canDeleteBoardFromList = boardListRole === 'owner'
+                const cardsCount = item.cardsCount || 0
+                const previewColumns = item.preview || []
+                const hasPreviewCards = previewColumns.some(
+                  (column) => (column.cardsCount ?? column.cards.length) > 0,
+                )
+                const maxPreviewCardsCount = Math.max(
+                  1,
+                  ...previewColumns.map((column) => column.cardsCount ?? column.cards.length),
+                )
 
                 return (
                   <article
                     key={item.id}
-                    className={[
-                      'home-board-item',
-                      boardListDragId === item.id ? 'is-dragging' : '',
-                    ]
-                      .filter(Boolean)
-                      .join(' ')}
-                    draggable
-                    onDragStart={(event) => {
-                      event.dataTransfer.effectAllowed = 'move'
-                      event.dataTransfer.setData('text/plain', item.id)
-                      setBoardListDragId(item.id)
-                    }}
-                    onDragOver={(event) => {
-                      if (!boardListDragId || boardListDragId === item.id) {
-                        return
-                      }
-
-                      event.preventDefault()
-                      event.dataTransfer.dropEffect = 'move'
-                    }}
-                    onDrop={(event) => {
-                      event.preventDefault()
-                      handleDropBoardListItem(item.id)
-                    }}
-                    onDragEnd={() => setBoardListDragId(null)}
+                    className="home-board-item"
                   >
+                    <div className="home-board-item__top">
+                      <button
+                        type="button"
+                        className="home-board-item__main"
+                        onClick={() => openBoard(item.id)}
+                      >
+                        <span
+                          className="home-board-item__title"
+                          title={item.title || 'Ретроспектива команды'}
+                        >
+                          {item.title || 'Ретроспектива команды'}
+                        </span>
+                        <div className="home-board-item__meta">
+                          <span>
+                            <i className="ri-time-line" aria-hidden="true" />
+                            {formatBoardDate(item.createdAt || item.updatedAt)}
+                          </span>
+                          <span>{getCardCountLabel(cardsCount)}</span>
+                        </div>
+                      </button>
+                      <div className="home-board-item__tools">
+                        <span
+                          className="home-board-item__role"
+                          title={boardRoleView.label}
+                          aria-label={boardRoleView.label}
+                        >
+                          <i className={boardRoleView.icon} aria-hidden="true" />
+                        </span>
+                        {canDeleteBoardFromList ? (
+                          <button
+                            type="button"
+                            className="home-board-item__delete"
+                            aria-label="Удалить доску из списка"
+                            onClick={() => setBoardDeleteCandidate(item)}
+                          >
+                            <i className="ri-delete-bin-line" aria-hidden="true" />
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
                     <button
                       type="button"
-                      className="home-board-item__main"
+                      className="home-board-item__preview"
+                      aria-label={`Открыть доску ${item.title || 'Ретроспектива команды'}`}
                       onClick={() => openBoard(item.id)}
                     >
-                      <span>{item.title || 'Ретроспектива команды'}</span>
-                      <small>
-                        {formatTimestamp(item.createdAt || item.updatedAt)} - {boardAccessLabel}
-                      </small>
+                      {hasPreviewCards ? (
+                        previewColumns.map((column) => {
+                          const columnCardsCount = column.cardsCount ?? column.cards.length
+                          const columnHeightRatio =
+                            columnCardsCount > 0
+                              ? (columnCardsCount / maxPreviewCardsCount) * 100
+                              : 0
+
+                          return (
+                            <span
+                              key={column.id}
+                              className={[
+                                'home-board-preview-column',
+                                columnCardsCount > 0 ? '' : 'is-empty',
+                              ]
+                                .filter(Boolean)
+                                .join(' ')}
+                              style={
+                                {
+                                  '--column-accent': column.accent,
+                                  '--preview-column-ratio': `${columnHeightRatio}%`,
+                                } as CSSProperties
+                              }
+                            />
+                          )
+                        })
+                      ) : (
+                        <div className="home-board-item__preview-empty">Пока пусто</div>
+                      )}
                     </button>
                     <div className="home-board-item__actions">
                       <button
                         type="button"
-                        className="home-board-item__icon home-board-item__icon--danger"
-                        aria-label="Удалить доску из списка"
-                        onClick={() => handleDeleteBoardFromList(item)}
+                        className="home-board-item__action"
+                        onClick={() => void handleShareBoardFromList(item)}
                       >
-                        <i className="ri-delete-bin-line" aria-hidden="true" />
+                        <i className="ri-link" aria-hidden="true" />
+                        {copiedBoardId === item.id ? 'Скопировано' : 'Поделиться'}
+                      </button>
+                      <button
+                        type="button"
+                        className="home-board-item__action"
+                        disabled={saving}
+                        onClick={() => void handleCloneBoardFromList(item)}
+                      >
+                        <i className="ri-file-copy-line" aria-hidden="true" />
+                        Клонировать
                       </button>
                     </div>
                   </article>
@@ -3175,10 +3581,55 @@ function App() {
             </div>
           ) : (
             <div className="home-empty">
-              <p>{directoryLoading ? 'Загружаем доски...' : 'Пока нет сохраненных досок.'}</p>
+              <p>
+                {directoryLoading
+                  ? 'Загружаем доски...'
+                  : 'Пока нет сохраненных досок. Создайте первую ретроспективу.'}
+              </p>
             </div>
           )}
         </section>
+        {boardDeleteCandidate ? (
+          <div className="create-survey-container">
+            <button
+              type="button"
+              className="modal-backdrop"
+              aria-label="Отменить удаление доски"
+              onClick={() => setBoardDeleteCandidate(null)}
+            />
+            <section
+              className="easy-modal delete-board-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="delete-board-title"
+            >
+              <div className="delete-board-modal__copy">
+                <h2 id="delete-board-title">Удалить доску?</h2>
+                <p>
+                  Доска «{boardDeleteCandidate.title || 'Ретроспектива команды'}» и все карточки
+                  будут удалены без возможности восстановления.
+                </p>
+              </div>
+              <div className="delete-board-modal__actions">
+                <button
+                  type="button"
+                  className="inline-secondary"
+                  onClick={() => setBoardDeleteCandidate(null)}
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  className="inline-danger"
+                  disabled={saving}
+                  onClick={() => void handleDeleteBoardFromList(boardDeleteCandidate)}
+                >
+                  Удалить
+                </button>
+              </div>
+            </section>
+          </div>
+        ) : null}
       </main>
     )
   }
@@ -3526,7 +3977,20 @@ function App() {
                 ]
                   .filter(Boolean)
                   .join(' ')}
-                onClick={() => setSelectedMobileColumnId(column.id)}
+                onClick={() => {
+                  setSelectedMobileColumnId(column.id)
+                  const scroller = document.querySelector<HTMLElement>('.columns-grid')
+                  const columnElement = document.querySelector<HTMLElement>(
+                    `[data-column-id="${column.id}"]`,
+                  )
+
+                  if (scroller && columnElement) {
+                    scroller.scrollTo({
+                      left: columnElement.offsetLeft - scroller.offsetLeft - 10,
+                      behavior: 'smooth',
+                    })
+                  }
+                }}
               >
                 {column.title}
               </button>
@@ -3547,6 +4011,7 @@ function App() {
 
             return (
               <article
+                data-column-id={column.id}
                 className={[
                   'retro-column',
                   columnDragState?.columnId === column.id ? 'is-column-dragging' : '',
@@ -3851,7 +4316,7 @@ function App() {
                     return (
                       <article
                         key={card.id}
-                        draggable={canMoveCurrentCard && !isEditing}
+                        draggable={!isCompactView && canMoveCurrentCard && !isEditing}
                         data-card-id={card.id}
                         className={[
                           'retro-card',
@@ -3876,9 +4341,38 @@ function App() {
                           dragState.dropPosition === 'after'
                             ? 'is-drop-after'
                             : '',
+                          mobileCardDrag?.cardId === card.id ? 'is-mobile-moving' : '',
+                          mobileCardDrag?.overCardId === card.id &&
+                          mobileCardDrag.dropPosition === 'before'
+                            ? 'is-mobile-drop-before'
+                            : '',
+                          mobileCardDrag?.overCardId === card.id &&
+                          mobileCardDrag.dropPosition === 'after'
+                            ? 'is-mobile-drop-after'
+                            : '',
                         ]
                           .filter(Boolean)
                           .join(' ')}
+                        onPointerDown={(event) => {
+                          beginMobileCardLongPress(
+                            event,
+                            card,
+                            canMoveCurrentCard,
+                            isEditing,
+                          )
+                        }}
+                        onPointerMove={updateMobileCardLongPress}
+                        onPointerUp={(event) => {
+                          void finishMobileCardDrag(event)
+                        }}
+                        onPointerCancel={(event) => {
+                          if (mobileCardDrag?.pointerId === event.pointerId) {
+                            setMobileCardDrag(null)
+                            document.body.classList.remove('is-mobile-card-dragging')
+                          }
+
+                          cancelMobileCardLongPress()
+                        }}
                         onDragStart={(event) => {
                           event.dataTransfer.effectAllowed = 'move'
                           event.dataTransfer.setData('text/plain', card.id)
@@ -4349,6 +4843,22 @@ function App() {
             )
           })}
         </div>
+        {mobileCardDrag ? (
+          <div
+            className="mobile-card-drag-ghost"
+            style={
+              {
+                '--mobile-drag-x': `${mobileCardDrag.x - mobileCardDrag.offsetX}px`,
+                '--mobile-drag-y': `${mobileCardDrag.y - mobileCardDrag.offsetY}px`,
+                '--mobile-drag-width': `${mobileCardDrag.width}px`,
+                '--mobile-drag-height': `${mobileCardDrag.height}px`,
+              } as CSSProperties
+            }
+            aria-hidden="true"
+          >
+            {mobileDraggedCard?.content}
+          </div>
+        ) : null}
           </section>
 
           <section className="solutions-flow workspace-panel" aria-label="Флоу решения проблем">
