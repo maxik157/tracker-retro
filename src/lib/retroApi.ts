@@ -614,16 +614,43 @@ export async function createRetroUser(name: string) {
 
 export async function signInRetroUser(accessCode: string) {
   const accessCodeHash = await hashAccessCode(accessCode)
-  const userId = await request<string | null>(getUserByCodePath(accessCodeHash))
+  const indexedUserId = await request<unknown>(getUserByCodePath(accessCodeHash))
 
-  if (!userId) {
-    throw new Error('Код доступа не найден.')
+  if (typeof indexedUserId === 'string') {
+    const indexedUser = await request<RetroUser | null>(getUserPath(indexedUserId))
+
+    if (indexedUser?.accessCodeHash === accessCodeHash) {
+      return indexedUser
+    }
   }
 
-  const user = await request<RetroUser | null>(getUserPath(userId))
+  // Older registrations could reach the user record before their code index was
+  // written. Recover that profile and repair the index for subsequent sign-ins.
+  const users = await request<Record<string, Partial<RetroUser>> | null>('/users.json')
+  const matchedEntry = Object.entries(users || {}).find(
+    ([, user]) => user?.accessCodeHash === accessCodeHash,
+  )
 
-  if (!user) {
-    throw new Error('Профиль не найден.')
+  if (!matchedEntry) {
+    throw new Error('Код доступа не найден. Проверьте, что он введён полностью.')
+  }
+
+  const [userId, rawUser] = matchedEntry
+  const user: RetroUser = {
+    id: rawUser.id || userId,
+    name: rawUser.name || 'Участник',
+    accessCodeHash,
+    createdAt: rawUser.createdAt || nowIso(),
+    updatedAt: rawUser.updatedAt || rawUser.createdAt || nowIso(),
+  }
+
+  try {
+    await request(getUserByCodePath(accessCodeHash), {
+      method: 'PUT',
+      body: JSON.stringify(user.id),
+    })
+  } catch {
+    // The recovered session remains valid even if the index repair is unavailable.
   }
 
   return user
